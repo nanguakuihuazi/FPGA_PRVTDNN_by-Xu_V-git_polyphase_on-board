@@ -1,0 +1,1 @@
+cycle,row,col,mul,exp_mul,weight_prev,act_prev,match

@@ -1,0 +1,20 @@
+# Vivado-generated build and simulation artifacts
+.Xil/
+.vivado/
+*.jou
+*.log
+*.str
+*.wdb
+*.wcfg
+*.pb
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+
+# Operating-system and editor metadata
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
