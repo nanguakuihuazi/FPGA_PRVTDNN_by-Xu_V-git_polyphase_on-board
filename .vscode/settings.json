@@ -1,0 +1,14 @@
+{
+    "verilog.linting.iverilog.includePath": [
+        "Code_TOP"
+    ],
+    "verilog.linting.slang.includePath": [
+        "Code_TOP"
+    ],
+    "verilog.linting.verilator.includePath": [
+        "Code_TOP"
+    ],
+    "verilog.linting.xvlog.includePath": [
+        "Code_TOP"
+    ]
+}

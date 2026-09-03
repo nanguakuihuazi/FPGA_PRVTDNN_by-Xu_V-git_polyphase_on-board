@@ -93,10 +93,7 @@ module prvtdnn_top (
     // (模块默认参数 ACC_WIDTH=48, 与 prvtdnn_defines.vh 的 ACC_WIDTH=40 不同)
     localparam INNER_ACC_WIDTH = 48;
 
-    // 各层权重加载完成后的脉动阵列排空周期
-    localparam HL1_DRAIN_CYC = HL1_IN + HL1_N;
-    localparam HL2_DRAIN_CYC = HL2_IN + HL2_N;
-    localparam HL3_DRAIN_CYC = HL3_IN + HL3_N;
+    // 输出层最后一行权重推送后的脉动阵列排空周期
     localparam OL_DRAIN_CYC  = OL_IN + OL_N;
 
     // NN 流水线延迟 (Hidden_Layers + Output_Layer_Dense)
@@ -109,8 +106,6 @@ module prvtdnn_top (
     localparam NN_LATENCY = NN_LATENCY_BASE +
                             PE_ROW_EXTRA_CYC * (HL1_IN + HL2_IN + HL3_IN + OL_IN) +
                             DENSE_STAGE_EXTRA_CYC * DENSE_STAGE_COUNT;
-
-    // (旧的 pipe_cnt 时序常量已移除, 改为状态机控制)
 
     // coeff_data 参数布局（16-bit 参数索引）：
     //   HL1_WT → HL1_BIAS → HL2_WT → HL2_BIAS → HL3_WT → HL3_BIAS → OL_WT → OL_BIAS。
@@ -198,7 +193,6 @@ module prvtdnn_top (
 // 3. 权重加载流水线 — 寄存器声明
 // ============================================================
 
-    reg [15:0] pipe_cnt;   // 主流水线计数器 (扩大位宽以适应更长的加载周期)
     reg        loading;    // 加载进行中标志
 
     // 各层权重/偏置驱动总线
@@ -232,20 +226,17 @@ module prvtdnn_top (
     reg [15:0] bias_buf [0:MAX_NEURONS-1]; // 偏置缓存寄存器
 
     // 顺序读取状态机
-    // 加载状态: IDLE -> 各层(权重逐行读取 -> 排空 -> 偏置读取) -> DONE
+    // 加载状态: IDLE -> 各层(权重逐行读取 -> 偏置读取) -> 输出层排空 -> DONE
     localparam [3:0]
         LD_IDLE       = 4'd0,
         LD_HL1_WT_RD  = 4'd1,   // HL1 权重: 逐个读取当前行
         LD_HL1_WT_PUSH= 4'd2,   // HL1 权重: 缓存满, 送入脉动阵列
-        LD_HL1_DRAIN  = 4'd3,   // HL1 排空
         LD_HL1_BIAS_RD= 4'd4,   // HL1 偏置读取
         LD_HL2_WT_RD  = 4'd5,
         LD_HL2_WT_PUSH= 4'd6,
-        LD_HL2_DRAIN  = 4'd7,
         LD_HL2_BIAS_RD= 4'd8,
         LD_HL3_WT_RD  = 4'd9,
         LD_HL3_WT_PUSH= 4'd10,
-        LD_HL3_DRAIN  = 4'd11,
         LD_HL3_BIAS_RD= 4'd12,
         LD_OL_WT_RD   = 4'd13,
         LD_OL_WT_PUSH = 4'd14,
@@ -300,7 +291,6 @@ module prvtdnn_top (
             ld_state        <= LD_IDLE;
             loading         <= 1'b0;
             load_done       <= 1'b0;
-            pipe_cnt        <= 16'd0;
             rd_param_idx    <= 16'd0;
             col_cnt         <= 6'd0;
             req_cnt         <= 6'd0;
@@ -352,7 +342,6 @@ module prvtdnn_top (
                     req_cnt      <= 6'd0;
                     rd_wait_cnt  <= 2'd0;
                     row_cnt      <= 6'd0;
-                    pipe_cnt     <= 16'd0;
                 end
             end
 
@@ -392,14 +381,13 @@ module prvtdnn_top (
                     hl1_inWt_top[j*INNER_ACC_WIDTH +: INNER_ACC_WIDTH] <=
                         {{(INNER_ACC_WIDTH-16){wt_buf[j][15]}}, wt_buf[j]};
                 hl1_inWtValid <= {HL1_N{1'b1}}; // 当前行的 16 个神经元权重同时有效
-                pipe_cnt <= pipe_cnt + 1;  // 每推送一行, pipe_cnt 增加 (用于排空计时)
                 if (row_cnt == HL1_IN - 1) begin
-                    // 所有行加载完毕, 进入排空
-                    ld_state  <= LD_HL1_DRAIN;
-                    drain_cnt <= 16'd0;
+                    // 中间层阵列彼此独立；最后一行推送后立即读取本层偏置。
+                    ld_state     <= LD_HL1_BIAS_RD;
                     row_cnt   <= 6'd0;
                     col_cnt   <= 6'd0;
                     req_cnt   <= 6'd0;
+                    rd_param_idx <= HL1_BIAS_OFF;
                     rd_wait_cnt <= 2'd0;
                 end else begin
                     row_cnt      <= row_cnt + 1;
@@ -408,19 +396,6 @@ module prvtdnn_top (
                     req_cnt      <= 6'd0;
                     rd_wait_cnt  <= 2'd0;
                     ld_state     <= LD_HL1_WT_RD;
-                end
-            end
-
-            // HL1 排空
-            LD_HL1_DRAIN: begin
-                if (drain_cnt == HL1_DRAIN_CYC - 1) begin
-                    ld_state     <= LD_HL1_BIAS_RD;
-                    col_cnt      <= 6'd0;
-                    req_cnt      <= 6'd0;
-                    rd_param_idx <= HL1_BIAS_OFF;
-                    rd_wait_cnt  <= 2'd0;
-                end else begin
-                    drain_cnt <= drain_cnt + 1;
                 end
             end
 
@@ -482,11 +457,12 @@ module prvtdnn_top (
                         {{(INNER_ACC_WIDTH-16){wt_buf[j][15]}}, wt_buf[j]};
                 hl2_inWtValid <= {HL2_N{1'b1}};
                 if (row_cnt == HL2_IN - 1) begin
-                    ld_state  <= LD_HL2_DRAIN;
-                    drain_cnt <= 16'd0;
+                    // 中间层阵列彼此独立；最后一行推送后立即读取本层偏置。
+                    ld_state     <= LD_HL2_BIAS_RD;
                     row_cnt   <= 6'd0;
                     col_cnt   <= 6'd0;
                     req_cnt   <= 6'd0;
+                    rd_param_idx <= HL2_BIAS_OFF;
                     rd_wait_cnt <= 2'd0;
                 end else begin
                     row_cnt      <= row_cnt + 1;
@@ -495,18 +471,6 @@ module prvtdnn_top (
                     req_cnt      <= 6'd0;
                     rd_wait_cnt  <= 2'd0;
                     ld_state     <= LD_HL2_WT_RD;
-                end
-            end
-
-            LD_HL2_DRAIN: begin
-                if (drain_cnt == HL2_DRAIN_CYC - 1) begin
-                    ld_state     <= LD_HL2_BIAS_RD;
-                    col_cnt      <= 6'd0;
-                    req_cnt      <= 6'd0;
-                    rd_param_idx <= HL2_BIAS_OFF;
-                    rd_wait_cnt  <= 2'd0;
-                end else begin
-                    drain_cnt <= drain_cnt + 1;
                 end
             end
 
@@ -565,11 +529,12 @@ module prvtdnn_top (
                         {{(INNER_ACC_WIDTH-16){wt_buf[j][15]}}, wt_buf[j]};
                 hl3_inWtValid <= {HL3_N{1'b1}};
                 if (row_cnt == HL3_IN - 1) begin
-                    ld_state  <= LD_HL3_DRAIN;
-                    drain_cnt <= 16'd0;
+                    // 中间层阵列彼此独立；最后一行推送后立即读取本层偏置。
+                    ld_state     <= LD_HL3_BIAS_RD;
                     row_cnt   <= 6'd0;
                     col_cnt   <= 6'd0;
                     req_cnt   <= 6'd0;
+                    rd_param_idx <= HL3_BIAS_OFF;
                     rd_wait_cnt <= 2'd0;
                 end else begin
                     row_cnt      <= row_cnt + 1;
@@ -578,18 +543,6 @@ module prvtdnn_top (
                     req_cnt      <= 6'd0;
                     rd_wait_cnt  <= 2'd0;
                     ld_state     <= LD_HL3_WT_RD;
-                end
-            end
-
-            LD_HL3_DRAIN: begin
-                if (drain_cnt == HL3_DRAIN_CYC - 1) begin
-                    ld_state     <= LD_HL3_BIAS_RD;
-                    col_cnt      <= 6'd0;
-                    req_cnt      <= 6'd0;
-                    rd_param_idx <= HL3_BIAS_OFF;
-                    rd_wait_cnt  <= 2'd0;
-                end else begin
-                    drain_cnt <= drain_cnt + 1;
                 end
             end
 

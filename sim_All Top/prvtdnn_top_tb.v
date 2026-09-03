@@ -420,13 +420,64 @@ module prvtdnn_top_tb;
     integer pd_rt_idx;
 
     // ------------------------------------------------------------------------
-    // Absolute path roots (Vivado xsim friendly)
+    // Relative paths, resolved from the simulation working directory.
+    // Launch the simulation with "sim_All Top" as the working directory.
     // ------------------------------------------------------------------------
-    localparam ROOT_DIR  = "G:/Undergraduate Thesis/Undergraduate Thesis_fpga/FPGA_PRVTDNN_by Xu_V7_polyphase_on board/sim_All Top/";
-    localparam INPUT_DIR = "G:/Undergraduate Thesis/Undergraduate Thesis_fpga/FPGA_PRVTDNN_by Xu_V7_polyphase_on board/sim_All Top/Input/";
-    localparam MODEL_DIR = "G:/Undergraduate Thesis/Undergraduate Thesis_fpga/FPGA_PRVTDNN_by Xu_V7_polyphase_on board/sim_All Top/Model/";
-    localparam GOLD_DIR  = "G:/Undergraduate Thesis/Undergraduate Thesis_fpga/FPGA_PRVTDNN_by Xu_V7_polyphase_on board/sim_All Top/Gold/";
-    localparam OUT_DIR   = "G:/Undergraduate Thesis/Undergraduate Thesis_fpga/FPGA_PRVTDNN_by Xu_V7_polyphase_on board/sim_All Top/FPGA_Out_Data/";
+    // XSim runs from <project>.sim/sim_1/behav/xsim, not from this source directory.
+    // Use +MEM_ROOT=<path> when launching from another location; otherwise use
+    // the normal Vivado-generated layout and fail loudly if data is absent.
+    reg [1023:0] ROOT_DIR;
+    reg [1023:0] INPUT_DIR;
+    reg [1023:0] MODEL_DIR;
+    reg [1023:0] GOLD_DIR;
+    reg [1023:0] OUT_DIR;
+    reg [1023:0] mem_root_arg;
+    reg [1023:0] mem_root_candidate;
+    integer mem_probe_fd;
+
+    task automatic select_mem_root;
+        begin
+            ROOT_DIR = "./";
+            if ($value$plusargs("MEM_ROOT=%s", mem_root_arg)) begin
+                ROOT_DIR = mem_root_arg;
+            end
+            else begin
+                mem_probe_fd = $fopen("./Input/data_in.hex", "r");
+                if (mem_probe_fd != 0) begin
+                    $fclose(mem_probe_fd);
+                end
+                else begin
+                    mem_root_candidate = "../../../../../../26-29_SEU/2026/Undergraduate Thesis/2.Code/2.Vivado Code/FPGA_PRVTDNN_by Xu_V-git_polyphase_on board/sim_All Top/";
+                    mem_probe_fd = $fopen({mem_root_candidate, "Input/data_in.hex"}, "r");
+                    if (mem_probe_fd != 0) begin
+                        $fclose(mem_probe_fd);
+                        ROOT_DIR = mem_root_candidate;
+                    end
+                    else begin
+                        $display("ERROR: Cannot locate simulation data. Use +MEM_ROOT=<path>/sim_All Top/.");
+                        $finish;
+                    end
+                end
+            end
+            INPUT_DIR = {ROOT_DIR, "Input/"};
+            MODEL_DIR = {ROOT_DIR, "Model/"};
+            GOLD_DIR  = {ROOT_DIR, "Gold/"};
+            OUT_DIR   = {ROOT_DIR, "FPGA_Out_Data/"};
+            $display("Simulation data root: %s", ROOT_DIR);
+        end
+    endtask
+
+    task automatic check_mem_file;
+        input [1023:0] file_name;
+        begin
+            mem_probe_fd = $fopen(file_name, "r");
+            if (mem_probe_fd == 0) begin
+                $display("ERROR: Required simulation file not found: %s", file_name);
+                $finish;
+            end
+            $fclose(mem_probe_fd);
+        end
+    endtask
 
     // Dump file descriptors
     integer fd_pp_fpga, fd_pp_gold;
@@ -461,6 +512,19 @@ module prvtdnn_top_tb;
     // Main flow
     // ------------------------------------------------------------------------
     initial begin
+        select_mem_root();
+        check_mem_file({INPUT_DIR, "data_in.hex"});
+        check_mem_file({MODEL_DIR, "parameter_in.mem"});
+        check_mem_file({GOLD_DIR, "preprocess_feat_golden.hex"});
+        check_mem_file({GOLD_DIR, "preprocess_rk_re_golden.hex"});
+        check_mem_file({GOLD_DIR, "preprocess_rk_im_golden.hex"});
+        check_mem_file({GOLD_DIR, "layer1_golden.hex"});
+        check_mem_file({GOLD_DIR, "layer2_golden.hex"});
+        check_mem_file({GOLD_DIR, "layer3_golden.hex"});
+        check_mem_file({GOLD_DIR, "layer4_golden.hex"});
+        check_mem_file({GOLD_DIR, "phase_denorm_golden_i.hex"});
+        check_mem_file({GOLD_DIR, "phase_denorm_golden_q.hex"});
+
         // init signals
         reset        = 1'b1;
         data_in      = 128'd0;
