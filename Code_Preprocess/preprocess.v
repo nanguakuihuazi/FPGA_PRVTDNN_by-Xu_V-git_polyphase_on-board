@@ -9,11 +9,12 @@
 //   4. 对前 N_poly 个分支额外生成 rk_k = exp(-j*theta_k)
 //   5. 组装特征: [Re(unit), Im(unit), R, R^2]
 //
-// 输出特征排列 (当前 36 维):
+// 输出特征排列 (当前 45 维):
 //   feat[ 0.. 8]: Re(x(n-k)/|x(n-k)|), k=0..8
 //   feat[ 9..17]: Im(x(n-k)/|x(n-k)|), k=0..8
 //   feat[18..26]: |x(n-k)|,            k=0..8
 //   feat[27..35]: |x(n-k)|^2,          k=0..8
+//   feat[36..44]: |x(n-k)|^3,          k=0..8
 //
 // rk 输出排列:
 //   rk_re_flat[j] = cos(theta_j)
